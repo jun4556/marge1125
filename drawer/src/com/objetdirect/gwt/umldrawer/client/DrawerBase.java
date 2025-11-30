@@ -917,6 +917,11 @@ public class DrawerBase extends DockPanel implements IDrawerBaseConectThread{
 
 	    // 新しいWebSocketクライアントを作成し、接続を開始する
 	    this.webSocketClient = new WebSocketClient(this.drawerPanel);
+	    
+	    // ユーザーIDとエクササイズIDを設定
+	    this.webSocketClient.setUserId(this.ifLogin.getCurUserName()); // 現在のユーザー名を設定
+	    this.webSocketClient.setExerciseId(exerciseId);
+	    
 	    this.webSocketClient.connect(webSocketURL);
 
 	    // "監視塔"作戦をリセットして、新しい演習の監視を開始する

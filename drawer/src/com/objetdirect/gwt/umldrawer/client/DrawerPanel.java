@@ -1,6 +1,8 @@
 package com.objetdirect.gwt.umldrawer.client;
 
 import java.util.HashMap;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Map.Entry;
 import java.util.logging.Logger;
 
@@ -62,6 +64,10 @@ public class DrawerPanel extends AbsolutePanel {
 	private int clientSequence = 0; // クライアント側のシーケンス番号
 	private int lastServerSequence = 0; // 最後に受信したサーバーシーケンス番号
 	private OperationTransformHelper otHelper; // OT操作送受信ヘルパー
+	
+	// ドラッグ状態管理のための追加フィールド
+	private HashMap<String, DragState> draggingElements = new HashMap<String, DragState>(); // 現在ドラッグ中の要素
+	private HashMap<String, List<RemoteOperation>> pendingRemoteOps = new HashMap<String, List<RemoteOperation>>(); // ドラッグ中にバッファされるリモート操作
 
 	FocusPanel topLeft = new FocusPanel();
 	FocusPanel top = new FocusPanel();
@@ -561,5 +567,239 @@ public class DrawerPanel extends AbsolutePanel {
 	    } catch (Exception e) {
 	        System.err.println("パッチ適用エラー: " + e.getMessage());
 	    }
+	}
+	
+	// ========== ドラッグ状態管理のための内部クラスとメソッド ==========
+	
+	/**
+	 * ドラッグ操作の状態を表す内部クラス
+	 */
+	private static class DragState {
+		public String elementId;      // ドラッグ中の要素のID
+		public Point startPosition;   // ドラッグ開始位置
+		public Point currentPosition; // 現在のドラッグ位置
+		public long startTime;        // ドラッグ開始時刻(ミリ秒)
+		public boolean isActive;      // ドラッグが現在アクティブか
+		
+		public DragState(String elementId, Point startPosition) {
+			this.elementId = elementId;
+			this.startPosition = startPosition;
+			this.currentPosition = startPosition;
+			this.startTime = System.currentTimeMillis();
+			this.isActive = true;
+		}
+	}
+	
+	/**
+	 * リモート操作を一時保管するための内部クラス
+	 */
+	private static class RemoteOperation {
+		public String userId;
+		public String elementId;
+		public String operationType;
+		public Point newPosition;  // MOVE操作の場合
+		public String partId;      // TEXT_EDIT操作の場合
+		public String newText;     // TEXT_EDIT操作の場合
+		public long timestamp;
+		
+		public RemoteOperation(String userId, String elementId, String operationType, long timestamp) {
+			this.userId = userId;
+			this.elementId = elementId;
+			this.operationType = operationType;
+			this.timestamp = timestamp;
+		}
+	}
+	
+	/**
+	 * ドラッグ開始を通知
+	 * UMLCanvasまたはアーティファクトのマウスダウンイベントから呼び出される
+	 */
+	public void notifyDragStart(String elementId, Point startPosition) {
+		DragState dragState = new DragState(elementId, startPosition);
+		draggingElements.put(elementId, dragState);
+		
+		// サーバーにドラッグ開始を通知(他のユーザーにゴーストアーティファクト表示の準備をさせる)
+		sendDragStart(elementId, startPosition);
+	}
+	
+	/**
+	 * ドラッグ中の位置更新を通知
+	 */
+	public void notifyDragMove(String elementId, Point currentPosition) {
+		DragState dragState = draggingElements.get(elementId);
+		if (dragState != null && dragState.isActive) {
+			dragState.currentPosition = currentPosition;
+		}
+	}
+	
+	/**
+	 * ドラッグ完了を通知
+	 * UMLCanvasまたはアーティファクトのマウスアップイベントから呼び出される
+	 */
+	public void notifyDragEnd(String elementId, Point finalPosition) {
+		DragState dragState = draggingElements.get(elementId);
+		if (dragState != null) {
+			dragState.isActive = false;
+			dragState.currentPosition = finalPosition;
+			
+			// バッファされていたリモート操作を処理
+			onDragCompleted(elementId, finalPosition);
+			
+			// ドラッグ状態をクリア
+			draggingElements.remove(elementId);
+			pendingRemoteOps.remove(elementId);
+		}
+	}
+	
+	/**
+	 * ドラッグ開始をサーバーに送信
+	 */
+	private void sendDragStart(String elementId, Point startPosition) {
+		WebSocketClient client = getWebSocketClient();
+		if (client != null && client.isOpen()) {
+			// WebSocketでDRAG_START操作を送信
+			// JSONフォーマット: {"action":"dragStart", "elementId":"...", "x":..., "y":...}
+			String message = "{\"action\":\"dragStart\", \"elementId\":\"" + elementId + 
+			                 "\", \"userId\":\"" + client.getUserId() + 
+			                 "\", \"exerciseId\":" + client.getExerciseId() +
+			                 ", \"x\":" + startPosition.getX() + ", \"y\":" + startPosition.getY() + "}";
+			client.send(message);
+		}
+	}
+	
+	/**
+	 * ドラッグ完了後にバッファされた操作を処理し、競合を検出・解決
+	 */
+	private void onDragCompleted(String elementId, Point finalPosition) {
+		List<RemoteOperation> bufferedOps = pendingRemoteOps.get(elementId);
+		if (bufferedOps == null || bufferedOps.isEmpty()) {
+			// バッファされた操作がない場合、通常通り移動操作を送信
+			sendMoveOperation(elementId, finalPosition);
+			return;
+		}
+		
+		// バッファされた操作の中に同じ要素への移動操作があるかチェック
+		RemoteOperation concurrentMove = null;
+		for (RemoteOperation op : bufferedOps) {
+			if ("MOVE".equals(op.operationType) && elementId.equals(op.elementId)) {
+				concurrentMove = op;
+				break;
+			}
+		}
+		
+		if (concurrentMove != null) {
+			// 競合が発生: Last-Write-Wins戦略を適用
+			DragState dragState = new DragState(elementId, finalPosition);
+			long localTimestamp = dragState.startTime;
+			
+			if (concurrentMove.timestamp < localTimestamp) {
+				// リモート操作の方が古い → ローカル操作を優先
+				sendMoveOperation(elementId, finalPosition);
+				// ローカルUIは既に正しい位置にあるはず
+			} else {
+				// リモート操作の方が新しい → リモート操作を優先
+				applyRemoteMoveOperation(elementId, concurrentMove.newPosition);
+				// ローカルの移動は破棄される(サーバーに送信しない)
+			}
+		} else {
+			// 競合なし: 通常通り送信
+			sendMoveOperation(elementId, finalPosition);
+		}
+		
+		// バッファされた他の操作(テキスト編集など)を適用
+		for (RemoteOperation op : bufferedOps) {
+			if (!"MOVE".equals(op.operationType)) {
+				applyBufferedOperation(op);
+			}
+		}
+	}
+	
+	/**
+	 * 移動操作をサーバーに送信
+	 */
+	private void sendMoveOperation(String elementId, Point position) {
+		WebSocketClient client = getWebSocketClient();
+		if (client != null && client.isOpen()) {
+			String message = "{\"action\":\"move\", \"elementId\":\"" + elementId + 
+			                 "\", \"userId\":\"" + client.getUserId() + 
+			                 "\", \"exerciseId\":" + client.getExerciseId() +
+			                 ", \"x\":" + position.getX() + ", \"y\":" + position.getY() + 
+			                 ", \"timestamp\":" + System.currentTimeMillis() + "}";
+			client.send(message);
+		}
+	}
+	
+	/**
+	 * リモートからの移動操作を適用(UIを更新)
+	 */
+	private void applyRemoteMoveOperation(String elementId, Point newPosition) {
+		try {
+			int id = Integer.parseInt(elementId.substring("element-".length()));
+			UMLArtifact artifact = UMLArtifact.getArtifactById(id);
+			if (artifact != null) {
+				artifact.setLocation(newPosition);
+				artifact.rebuildGfxObject();
+			}
+		} catch (Exception e) {
+			System.err.println("リモート移動操作の適用エラー: " + e.getMessage());
+		}
+	}
+	
+	/**
+	 * バッファされた操作を適用
+	 */
+	private void applyBufferedOperation(RemoteOperation op) {
+		if ("TEXT_EDIT".equals(op.operationType)) {
+			updateArtifactText(op.elementId, op.partId, op.newText);
+		}
+		// 他の操作タイプもここで処理
+	}
+	
+	/**
+	 * リモート操作を受信したときに呼び出される
+	 * WebSocketClientから呼び出される
+	 */
+	public void applyRemoteOperation(String userId, String elementId, String operationType, 
+	                                 Point newPosition, String partId, String newText, long timestamp) {
+		// ドラッグ中の要素への操作かチェック
+		if (draggingElements.containsKey(elementId)) {
+			// ドラッグ中 → バッファに保存
+			RemoteOperation remoteOp = new RemoteOperation(userId, elementId, operationType, timestamp);
+			remoteOp.newPosition = newPosition;
+			remoteOp.partId = partId;
+			remoteOp.newText = newText;
+			
+			List<RemoteOperation> buffer = pendingRemoteOps.get(elementId);
+			if (buffer == null) {
+				buffer = new ArrayList<RemoteOperation>();
+				pendingRemoteOps.put(elementId, buffer);
+			}
+			buffer.add(remoteOp);
+			
+			// ゴーストアーティファクトを表示(視覚的フィードバック)
+			if ("MOVE".equals(operationType)) {
+				showGhostArtifact(elementId, newPosition, userId);
+			}
+		} else {
+			// ドラッグ中でない → 即座に適用
+			if ("MOVE".equals(operationType)) {
+				applyRemoteMoveOperation(elementId, newPosition);
+			} else if ("TEXT_EDIT".equals(operationType)) {
+				updateArtifactText(elementId, partId, newText);
+			}
+		}
+	}
+	
+	/**
+	 * ゴーストアーティファクト(半透明の位置プレビュー)を表示
+	 */
+	private void showGhostArtifact(String elementId, Point position, String userId) {
+		// TODO: GWT UIでゴーストアーティファクトを表示する実装
+		// 半透明の図形を指定位置に描画し、ユーザーIDラベルを付ける
+		// 実装例:
+		// - 一時的なSimplePanelを作成し、半透明スタイルを適用
+		// - 指定位置に配置
+		// - 数秒後に自動削除、またはドラッグ完了時に削除
+		Logger.getGlobal().info("ゴーストアーティファクト表示: elementId=" + elementId + ", userId=" + userId);
 	}
 }

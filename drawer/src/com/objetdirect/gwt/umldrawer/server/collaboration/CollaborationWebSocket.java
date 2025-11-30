@@ -59,6 +59,10 @@ public class CollaborationWebSocket {
             
             if ("editOperation".equals(action)) {
                 handleEditOperation(json, session);
+            } else if ("move".equals(action)) {
+                handleMoveOperation(json, session);
+            } else if ("dragStart".equals(action)) {
+                handleDragStart(json, session);
             }
             // 他のアクションもここで処理可能
             
@@ -208,5 +212,116 @@ public class CollaborationWebSocket {
         }
         
         logger.info("操作を全クライアントに配信しました。ServerSeq: " + operation.getServerSequence());
+    }
+    
+    /**
+     * MOVE操作を処理
+     */
+    private void handleMoveOperation(JsonObject json, Session senderSession) {
+        try {
+            int exerciseId = json.get("exerciseId") != null ? json.get("exerciseId").getAsInt() : 1;
+            String elementId = json.get("elementId").getAsString();
+            String userId = json.get("userId") != null ? json.get("userId").getAsString() : "unknown";
+            int x = json.get("x").getAsInt();
+            int y = json.get("y").getAsInt();
+            long timestamp = json.get("timestamp").getAsLong();
+            
+            // OperationManagerで競合解決
+            OperationManager.Position resolvedPos = operationManager.processMoveOperation(
+                exerciseId, elementId, userId, x, y, timestamp
+            );
+            
+            // 全クライアントに確定した位置を配信
+            broadcastMoveOperation(exerciseId, elementId, userId, resolvedPos, senderSession);
+            
+            logger.info("MOVE操作を処理しました。element: " + elementId + ", pos: (" + resolvedPos.x + "," + resolvedPos.y + ")");
+            
+        } catch (Exception e) {
+            logger.severe("MOVE操作の処理エラー: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    /**
+     * ドラッグ開始を処理
+     */
+    private void handleDragStart(JsonObject json, Session senderSession) {
+        try {
+            int exerciseId = json.get("exerciseId") != null ? json.get("exerciseId").getAsInt() : 1;
+            String elementId = json.get("elementId").getAsString();
+            String userId = json.get("userId") != null ? json.get("userId").getAsString() : "unknown";
+            int x = json.get("x").getAsInt();
+            int y = json.get("y").getAsInt();
+            long timestamp = System.currentTimeMillis();
+            
+            // OperationManagerにドラッグ開始を記録
+            operationManager.recordDragStart(exerciseId, elementId, userId, x, y, timestamp);
+            
+            // 他のクライアントにドラッグ開始を通知
+            broadcastDragStart(exerciseId, elementId, userId, x, y, senderSession);
+            
+            logger.info("ドラッグ開始を処理しました。element: " + elementId + ", user: " + userId);
+            
+        } catch (Exception e) {
+            logger.severe("ドラッグ開始の処理エラー: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    /**
+     * MOVE操作を全クライアントに配信
+     */
+    private void broadcastMoveOperation(int exerciseId, String elementId, String userId, 
+                                       OperationManager.Position position, Session senderSession) {
+        JsonObject response = new JsonObject();
+        response.addProperty("action", "move");
+        response.addProperty("exerciseId", exerciseId);
+        response.addProperty("elementId", elementId);
+        response.addProperty("userId", userId);
+        response.addProperty("x", position.x);
+        response.addProperty("y", position.y);
+        response.addProperty("timestamp", position.timestamp);
+        
+        String jsonString = gson.toJson(response);
+        
+        synchronized (sessions) {
+            for (Session session : sessions) {
+                try {
+                    // 送信者にも送信(確認用)
+                    session.getBasicRemote().sendText(jsonString);
+                } catch (IOException e) {
+                    logger.warning("MOVE配信失敗: " + e.getMessage());
+                }
+            }
+        }
+    }
+    
+    /**
+     * ドラッグ開始を全クライアントに配信
+     */
+    private void broadcastDragStart(int exerciseId, String elementId, String userId, 
+                                   int x, int y, Session senderSession) {
+        JsonObject response = new JsonObject();
+        response.addProperty("action", "dragStart");
+        response.addProperty("exerciseId", exerciseId);
+        response.addProperty("elementId", elementId);
+        response.addProperty("userId", userId);
+        response.addProperty("x", x);
+        response.addProperty("y", y);
+        
+        String jsonString = gson.toJson(response);
+        
+        synchronized (sessions) {
+            for (Session session : sessions) {
+                try {
+                    // 送信者以外に通知
+                    if (!session.equals(senderSession)) {
+                        session.getBasicRemote().sendText(jsonString);
+                    }
+                } catch (IOException e) {
+                    logger.warning("ドラッグ開始配信失敗: " + e.getMessage());
+                }
+            }
+        }
     }
 }

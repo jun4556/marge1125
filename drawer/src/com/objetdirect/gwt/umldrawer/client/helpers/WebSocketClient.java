@@ -4,6 +4,7 @@ import com.google.gwt.core.client.JavaScriptObject;
 import com.google.gwt.json.client.JSONObject;
 import com.google.gwt.json.client.JSONParser;
 import com.google.gwt.json.client.JSONValue;
+import com.objetdirect.gwt.umlapi.client.engine.Point;
 import com.objetdirect.gwt.umldrawer.client.DrawerPanel;
 
 
@@ -11,9 +12,27 @@ public class WebSocketClient {
 
     private JavaScriptObject ws;
     private DrawerPanel drawerPanel;
+    private String userId;
+    private int exerciseId;
 
     public WebSocketClient(DrawerPanel panel) {
         this.drawerPanel = panel;
+    }
+    
+    public void setUserId(String userId) {
+        this.userId = userId;
+    }
+    
+    public void setExerciseId(int exerciseId) {
+        this.exerciseId = exerciseId;
+    }
+    
+    public String getUserId() {
+        return this.userId;
+    }
+    
+    public int getExerciseId() {
+        return this.exerciseId;
     }
 
     public native void connect(String url) /*-{
@@ -113,6 +132,33 @@ public class WebSocketClient {
                         // DrawerPanelのOTヘルパーを使用して操作を適用
                         drawerPanel.applyOTOperation(serverSequence, elementId, partId, afterText, userId, isOwnOperation);
                     }
+                }
+                else if ("move".equals(action)) {
+                    // MOVE操作の受信
+                    String elementId = jsonObject.get("elementId").isString().stringValue();
+                    int x = (int) jsonObject.get("x").isNumber().doubleValue();
+                    int y = (int) jsonObject.get("y").isNumber().doubleValue();
+                    long timestamp = (long) jsonObject.get("timestamp").isNumber().doubleValue();
+                    String userId = jsonObject.containsKey("userId") ? 
+                                   jsonObject.get("userId").isString().stringValue() : "unknown";
+                    
+                    if (drawerPanel != null) {
+                        com.objetdirect.gwt.umlapi.client.engine.Point position = 
+                            new com.objetdirect.gwt.umlapi.client.engine.Point(x, y);
+                        drawerPanel.applyRemoteOperation(userId, elementId, "MOVE", position, null, null, timestamp);
+                    }
+                }
+                else if ("dragStart".equals(action)) {
+                    // ドラッグ開始通知の受信(他のユーザーがドラッグを開始した)
+                    String elementId = jsonObject.get("elementId").isString().stringValue();
+                    int x = (int) jsonObject.get("x").isNumber().doubleValue();
+                    int y = (int) jsonObject.get("y").isNumber().doubleValue();
+                    String userId = jsonObject.containsKey("userId") ? 
+                                   jsonObject.get("userId").isString().stringValue() : "unknown";
+                    
+                    // TODO: 他のユーザーのドラッグ開始を視覚的に表示
+                    // 例: ゴーストアーティファクトを表示
+                    System.out.println("User " + userId + " started dragging " + elementId);
                 }
             }
         } catch (Exception e) {
