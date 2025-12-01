@@ -42,10 +42,12 @@ import com.objetdirect.gwt.umlapi.client.umlcomponents.UMLDiagram;
 import com.objetdirect.gwt.umlapi.client.umlcomponents.UMLDiagram.Type;
 import com.objetdirect.gwt.umldrawer.client.helpers.DiffMatchPatchGwt;
 import com.objetdirect.gwt.umldrawer.client.helpers.OperationTransformHelper;
+import com.objetdirect.gwt.umlapi.client.helpers.DragEventListener;
+import com.objetdirect.gwt.umlapi.client.engine.Point;
 import com.objetdirect.gwt.umldrawer.client.helpers.WebSocketClient;
 
 
-public class DrawerPanel extends AbsolutePanel {
+public class DrawerPanel extends AbsolutePanel implements DragEventListener {
 
 	private SimplePanel bottomLeftCornerShadow;
 	private SimplePanel bottomRightCornerShadow;
@@ -141,14 +143,15 @@ public class DrawerPanel extends AbsolutePanel {
 		final boolean isShadowed = OptionsManager.get("Shadowed") == 1;
 		Logger.getGlobal().info("Creating drawer");
 
-		this.uMLCanvas = new UMLCanvas(new UMLDiagram(UMLDiagram.Type.getUMLDiagramFromIndex(OptionsManager.get("DiagramType"))), this.width,
-				this.height);
+	this.uMLCanvas = new UMLCanvas(new UMLDiagram(UMLDiagram.Type.getUMLDiagramFromIndex(OptionsManager.get("DiagramType"))), this.width,
+			this.height);
 
-		this.add(this.uMLCanvas);
+	this.add(this.uMLCanvas);
+		
+	// OT実装: UMLCanvasにドラッグイベントリスナーを設定
+	this.uMLCanvas.setDragEventListener(this);
 
-		final int directionPanelSizes = OptionsManager.get("DirectionPanelSizes");
-
-		final HashMap<FocusPanel, Point> panelsSizes = this.makeDirectionPanelsSizes(directionPanelSizes);
+	final int directionPanelSizes = OptionsManager.get("DirectionPanelSizes");		final HashMap<FocusPanel, Point> panelsSizes = this.makeDirectionPanelsSizes(directionPanelSizes);
 		final HashMap<FocusPanel, Point> panelsPositions = this.makeDirectionPanelsPositions(directionPanelSizes);
 
 		for (final Entry<FocusPanel, Direction> panelEntry : this.directionPanels.entrySet()) {
@@ -611,10 +614,11 @@ public class DrawerPanel extends AbsolutePanel {
 	}
 	
 	/**
-	 * ドラッグ開始を通知
-	 * UMLCanvasまたはアーティファクトのマウスダウンイベントから呼び出される
+	 * OT実装: ドラッグ開始を通知 (DragEventListenerインターフェースの実装)
+	 * UMLCanvasがmouseLeftPressed()で呼び出す
 	 */
-	public void notifyDragStart(String elementId, Point startPosition) {
+	@Override
+	public void onDragStart(String elementId, Point startPosition) {
 		DragState dragState = new DragState(elementId, startPosition);
 		draggingElements.put(elementId, dragState);
 		
@@ -623,9 +627,10 @@ public class DrawerPanel extends AbsolutePanel {
 	}
 	
 	/**
-	 * ドラッグ中の位置更新を通知
+	 * OT実装: ドラッグ中の位置更新を通知 (DragEventListenerインターフェースの実装)
 	 */
-	public void notifyDragMove(String elementId, Point currentPosition) {
+	@Override
+	public void onDragMove(String elementId, Point currentPosition) {
 		DragState dragState = draggingElements.get(elementId);
 		if (dragState != null && dragState.isActive) {
 			dragState.currentPosition = currentPosition;
@@ -633,10 +638,11 @@ public class DrawerPanel extends AbsolutePanel {
 	}
 	
 	/**
-	 * ドラッグ完了を通知
-	 * UMLCanvasまたはアーティファクトのマウスアップイベントから呼び出される
+	 * OT実装: ドラッグ完了を通知 (DragEventListenerインターフェースの実装)
+	 * UMLCanvasがdrop()で呼び出す
 	 */
-	public void notifyDragEnd(String elementId, Point finalPosition) {
+	@Override
+	public void onDragEnd(String elementId, Point finalPosition) {
 		DragState dragState = draggingElements.get(elementId);
 		if (dragState != null) {
 			dragState.isActive = false;
@@ -687,26 +693,26 @@ public class DrawerPanel extends AbsolutePanel {
 			}
 		}
 		
-		if (concurrentMove != null) {
-			// 競合が発生: Last-Write-Wins戦略を適用
-			DragState dragState = new DragState(elementId, finalPosition);
-			long localTimestamp = dragState.startTime;
-			
-			if (concurrentMove.timestamp < localTimestamp) {
-				// リモート操作の方が古い → ローカル操作を優先
-				sendMoveOperation(elementId, finalPosition);
-				// ローカルUIは既に正しい位置にあるはず
-			} else {
-				// リモート操作の方が新しい → リモート操作を優先
-				applyRemoteMoveOperation(elementId, concurrentMove.newPosition);
-				// ローカルの移動は破棄される(サーバーに送信しない)
-			}
-		} else {
-			// 競合なし: 通常通り送信
-			sendMoveOperation(elementId, finalPosition);
-		}
+	if (concurrentMove != null) {
+		// 競合が発生: Last-Write-Wins戦略を適用
+		// ドラッグ完了時刻を取得（現在時刻）
+		long localTimestamp = System.currentTimeMillis();
 		
-		// バッファされた他の操作(テキスト編集など)を適用
+		// Last-Write-Wins: タイムスタンプが新しい方（大きい方）を採用
+		if (localTimestamp > concurrentMove.timestamp) {
+			// ローカル操作の方が新しい → ローカル操作を優先
+			sendMoveOperation(elementId, finalPosition);
+			System.out.println("競合解決: ローカル操作を採用 (local=" + localTimestamp + ", remote=" + concurrentMove.timestamp + ")");
+		} else {
+			// リモート操作の方が新しい、または同時刻 → リモート操作を優先
+			applyRemoteMoveOperation(elementId, concurrentMove.newPosition);
+			System.out.println("競合解決: リモート操作を採用 (local=" + localTimestamp + ", remote=" + concurrentMove.timestamp + ")");
+			// ローカルの移動は破棄される(サーバーに送信しない)
+		}
+	} else {
+		// 競合なし: 通常通り送信
+		sendMoveOperation(elementId, finalPosition);
+	}		// バッファされた他の操作(テキスト編集など)を適用
 		for (RemoteOperation op : bufferedOps) {
 			if (!"MOVE".equals(op.operationType)) {
 				applyBufferedOperation(op);

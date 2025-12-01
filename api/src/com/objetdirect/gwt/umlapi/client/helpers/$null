@@ -1,0 +1,12 @@
+Exception calling "Substring" with "2" argument(s): "startIndex 
+cannot be larger than length of string.
+Parameter name: startIndex"
+At line:1 char:1
++ (Get-Content UMLCanvas.java -Raw -Encoding UTF8).Substring(145
+000, 20 ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [], MethodInvoc 
+   ationException
+    + FullyQualifiedErrorId : ArgumentOutOfRangeException
+ 

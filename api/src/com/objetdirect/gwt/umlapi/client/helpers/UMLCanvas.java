@@ -30,6 +30,7 @@ import com.google.gwt.user.client.ui.AbsolutePanel;
 import com.google.gwt.user.client.ui.Label;
 import com.google.gwt.user.client.ui.RootPanel;
 import com.google.gwt.user.client.ui.Widget;
+import com.objetdirect.gwt.umlapi.client.helpers.DragEventListener;
 import com.objetdirect.gwt.umlapi.client.artifacts.ActorArtifact;
 import com.objetdirect.gwt.umlapi.client.artifacts.AssetAndMisUseRelationLinkArtifact;
 import com.objetdirect.gwt.umlapi.client.artifacts.AssetArtifact;
@@ -114,6 +115,7 @@ public class UMLCanvas extends AbsolutePanel {
 	private static long										lifeLineCount					= 1;
 	private String											copyBuffer 						= "";
 	public static WebSocketSender webSocketSender;
+	private DragEventListener								dragEventListener				= null;
 	private long											noteCount;
 	private LinkKind										activeLinking;
 	private Point											selectBoxStartPoint;
@@ -282,6 +284,16 @@ public class UMLCanvas extends AbsolutePanel {
 		
 	}
 
+	/**
+	 * OT実装: ドラッグイベントリスナーを設定
+	 * DrawerPanelなどの上位コンポーネントがドラッグイベントを受け取るために使用
+	 * 
+	 * @param listener ドラッグイベントを受け取るリスナー
+	 */
+	public void setDragEventListener(DragEventListener listener) {
+		this.dragEventListener = listener;
+	}
+	
 	/**
 	 * Add an {@link UMLArtifact} to this canvas
 	 *
@@ -1741,18 +1753,9 @@ public class UMLCanvas extends AbsolutePanel {
 									selectedArtifact.getLocation().getY() + direction.getYShift()));
 
 							selectedArtifact.rebuildGfxObject();
-							if (UMLCanvas.webSocketSender != null) {
-							    String elementId = "element-" + selectedArtifact.getId();
-							    int newX = selectedArtifact.getLocation().getX();
-							    int newY = selectedArtifact.getLocation().getY();
-							    String message = "{\"action\":\"move\", \"elementId\":\"" + elementId + "\", \"x\":" + newX + ", \"y\":" + newY + "}";
-							    UMLCanvas.webSocketSender.send(message);
-							}
-							// dropメソッドの中のforループに追加
-
-							// --- ここから追加 ---
 							
-							// --- ここまで追加 ---// ← これを何とかすれば赤のままになる ならなかった
+							// OT実装により、DrawerPanel経由でWebSocket送信されます
+							// (キーボード矢印キーによる移動のため、dragEventListenerは呼ばれません)
 						}
 					};
 				}
@@ -1997,6 +2000,12 @@ public class UMLCanvas extends AbsolutePanel {
 				selectedArtifact.moveTo(Point.substract(Point.add(selectedArtifact.getLocation(), this.totalDragShift), this.duringDragOffset));
 
 				selectedArtifact.rebuildGfxObject();
+
+				            // OT実装: ドラッグ完了をリスナーに通知
+            if (this.dragEventListener != null) {
+                String elementId = "artifact-" + selectedArtifact.getId();
+                this.dragEventListener.onDragEnd(elementId, selectedArtifact.getLocation());
+            }
 
 
 				//TODO dropEvent

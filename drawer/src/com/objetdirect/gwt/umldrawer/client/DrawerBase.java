@@ -915,16 +915,14 @@ public class DrawerBase extends DockPanel implements IDrawerBaseConectThread{
 	    String webSocketURL = "ws://192.168.18.123:8080/KIfU4/diagram/" + exerciseId;
 	    System.out.println("接続先URL: " + webSocketURL); // デバッグ用にコンソールに出力するぞ
 
-	    // 新しいWebSocketクライアントを作成し、接続を開始する
-	    this.webSocketClient = new WebSocketClient(this.drawerPanel);
-	    
-	    // ユーザーIDとエクササイズIDを設定
-	    this.webSocketClient.setUserId(this.ifLogin.getCurUserName()); // 現在のユーザー名を設定
-	    this.webSocketClient.setExerciseId(exerciseId);
-	    
-	    this.webSocketClient.connect(webSocketURL);
-
-	    // "監視塔"作戦をリセットして、新しい演習の監視を開始する
+    // 新しいWebSocketクライアントを作成し、接続を開始する
+    this.webSocketClient = new WebSocketClient(this.drawerPanel);
+    
+    // ユーザーIDとエクササイズIDを設定
+    this.webSocketClient.setUserId(DrawerSession.student.getStudentId()); // 現在のユーザー名を設定
+    this.webSocketClient.setExerciseId(Integer.parseInt(exerciseId)); // StringをintT型に変換
+    
+    this.webSocketClient.connect(webSocketURL);	    // "監視塔"作戦をリセットして、新しい演習の監視を開始する
 	    this.lastCanvasUrl = ""; // 前回の状態をリセット
 	    if (this.syncTimer != null) {
 	    	this.syncTimer.cancel(); // 念のため一度止めてから
