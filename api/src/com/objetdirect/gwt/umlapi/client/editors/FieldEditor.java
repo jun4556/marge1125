@@ -172,19 +172,20 @@ public abstract class FieldEditor {
 	protected void validate(final boolean isNextable) {
 		boolean isStillNextable = isNextable;
 		final String newContent = FieldEditor.editField.getText();
-		// validate(boolean isNextable) メソッドの中に追加
 
-		// validate(boolean isNextable) メソッドの中の、前回追加した部分をこれに書き換える
-
+		// ★★★ OT処理を実装 ★★★
 		if (this.originalText != null && !this.originalText.equals(newContent)) {
 		    String elementId = "element-" + this.artifact.getId();
 		    String partId = this.artifact.getClass().getName();
 
-		    // 編集前と編集後の両方のテキストを送る！
-		    String message = "{\"action\":\"textEditOT\", \"elementId\":\"" + elementId + "\", \"partId\":\"" + partId + "\", \"originalText\":\"" + this.originalText.replace("\"", "\\\"") + "\", \"newText\":\"" + newContent.replace("\"", "\\\"") + "\"}";
-
-		    if (UMLCanvas.webSocketSender != null) {
-		        UMLCanvas.webSocketSender.send(message);
+		    // UMLCanvasからDragEventListenerを取得
+		    DragEventListener listener = this.canvas.getDragEventListener();
+		    if (listener != null) {
+		        // インターフェース経由でOT処理を実行
+		        listener.sendTextChangeWithOT(elementId, partId, this.originalText, newContent);
+		        System.out.println("OT text change sent: " + elementId + ", " + partId);
+		    } else {
+		        System.err.println("WARNING: DragEventListener not available for OT");
 		    }
 		}
 		System.out.println("newContent="+newContent);

@@ -873,16 +873,8 @@ public class DrawerBase extends DockPanel implements IDrawerBaseConectThread{
 		// 0.5秒ごとに"監視"を実行するんだ！
 		this.syncTimer.scheduleRepeating(500);
 
-		// UMLCanvasが持つ"契約者"の宝箱に、我こそが契約者だと名乗り出る！
-		UMLCanvas.webSocketSender = new WebSocketSender() {
-		    @Override
-		    public void send(String message) {
-		        // 契約が実行されたら、実際のWebSocketクライアントに荷物を渡す
-		        if (webSocketClient != null) {
-		            webSocketClient.send(message);
-		        }
-		    }
-		};
+		// ★★★ 古いWebSocketSenderコードは削除しました ★★★
+		// DragEventListenerパターンに移行したため、UMLCanvas.webSocketSenderは不要です
 
 		mainPanel.showWidget(0);
 
@@ -923,11 +915,22 @@ public class DrawerBase extends DockPanel implements IDrawerBaseConectThread{
     this.webSocketClient.setExerciseId(Integer.parseInt(exerciseId)); // StringをintT型に変換
     
     this.webSocketClient.connect(webSocketURL);	    // "監視塔"作戦をリセットして、新しい演習の監視を開始する
-	    this.lastCanvasUrl = ""; // 前回の状態をリセット
-	    if (this.syncTimer != null) {
-	    	this.syncTimer.cancel(); // 念のため一度止めてから
-	        this.syncTimer.scheduleRepeating(500); // タイマーを再開
-	    }
+    
+    // ★★★ OTHelperを初期化 ★★★
+    if (this.drawerPanel != null) {
+        this.drawerPanel.initializeOTHelper(
+            DrawerSession.student.getStudentId(), 
+            Integer.parseInt(exerciseId)
+        );
+        System.out.println("OTHelper initialized for user: " + DrawerSession.student.getStudentId() + 
+                           ", exercise: " + exerciseId);
+    }
+    
+    this.lastCanvasUrl = ""; // 前回の状態をリセット
+    if (this.syncTimer != null) {
+    	this.syncTimer.cancel(); // 念のため一度止めてから
+        this.syncTimer.scheduleRepeating(500); // タイマーを再開
+    }
 	}
 
 
@@ -1591,7 +1594,11 @@ public class DrawerBase extends DockPanel implements IDrawerBaseConectThread{
 	    // 更新がループしないように、一時的に"更新中"の旗を立てる
 	    isUpdating = true;
 	    // 監視タイマーも一旦止める！
-	    syncTimer.cancel();
+	    if (this.syncTimer != null) {
+	        this.syncTimer.cancel();
+	    } else {
+	        System.err.println("WARNING: syncTimer is null in syncCanvasFromServer");
+	    }
 
 	    if (Session.getActiveCanvas() != null) {
 	        Session.getActiveCanvas().clearCanvas();
@@ -1605,7 +1612,9 @@ public class DrawerBase extends DockPanel implements IDrawerBaseConectThread{
 	        @Override
 	        public void run() {
 	            isUpdating = false; // "更新中"の旗を下ろす
-	            syncTimer.scheduleRepeating(500); 
+	            if (syncTimer != null) {
+	                syncTimer.scheduleRepeating(500);
+	            }
 	        }
 	    }.schedule(1000);
 	}

@@ -222,19 +222,30 @@ public class CollaborationWebSocket {
             int exerciseId = json.get("exerciseId") != null ? json.get("exerciseId").getAsInt() : 1;
             String elementId = json.get("elementId").getAsString();
             String userId = json.get("userId") != null ? json.get("userId").getAsString() : "unknown";
-            int x = json.get("x").getAsInt();
-            int y = json.get("y").getAsInt();
+            
+            // 新しいフィールドを取得 (oldX, oldY, newX, newY, deltaX, deltaY)
+            int oldX = json.has("oldX") ? json.get("oldX").getAsInt() : 0;
+            int oldY = json.has("oldY") ? json.get("oldY").getAsInt() : 0;
+            int newX = json.has("newX") ? json.get("newX").getAsInt() : json.get("x").getAsInt();
+            int newY = json.has("newY") ? json.get("newY").getAsInt() : json.get("y").getAsInt();
+            int deltaX = json.has("deltaX") ? json.get("deltaX").getAsInt() : 0;
+            int deltaY = json.has("deltaY") ? json.get("deltaY").getAsInt() : 0;
             long timestamp = json.get("timestamp").getAsLong();
             
             // OperationManagerで競合解決
             OperationManager.Position resolvedPos = operationManager.processMoveOperation(
-                exerciseId, elementId, userId, x, y, timestamp
+                exerciseId, elementId, userId, newX, newY, timestamp
             );
+            
+            // ★★★ DB保存を追加 ★★★
+            saveMoveOperationToDatabase(exerciseId, elementId, userId, 
+                oldX, oldY, newX, newY, deltaX, deltaY, timestamp);
             
             // 全クライアントに確定した位置を配信
             broadcastMoveOperation(exerciseId, elementId, userId, resolvedPos, senderSession);
             
-            logger.info("MOVE操作を処理しました。element: " + elementId + ", pos: (" + resolvedPos.x + "," + resolvedPos.y + ")");
+            logger.info("MOVE操作を処理しました。element: " + elementId + 
+                       ", from: (" + oldX + "," + oldY + ") to: (" + resolvedPos.x + "," + resolvedPos.y + ")");
             
         } catch (Exception e) {
             logger.severe("MOVE操作の処理エラー: " + e.getMessage());
@@ -322,6 +333,58 @@ public class CollaborationWebSocket {
                     logger.warning("ドラッグ開始配信失敗: " + e.getMessage());
                 }
             }
+        }
+    }
+    
+    /**
+     * 移動操作をDBに保存
+     * 
+     * @param exerciseId 演習ID
+     * @param elementId 要素ID
+     * @param userId ユーザーID
+     * @param oldX 移動前のX座標
+     * @param oldY 移動前のY座標
+     * @param newX 移動後のX座標
+     * @param newY 移動後のY座標
+     * @param deltaX X方向の移動距離
+     * @param deltaY Y方向の移動距離
+     * @param timestamp タイムスタンプ
+     */
+    private void saveMoveOperationToDatabase(int exerciseId, String elementId, String userId,
+                                            int oldX, int oldY, int newX, int newY, 
+                                            int deltaX, int deltaY, long timestamp) {
+        try {
+            Dao dao = new Dao();
+            
+            // operation_logテーブルに移動操作を保存
+            // server_sequenceはNOT NULLなので、timestampを使用
+            String sql = "INSERT INTO operation_log " +
+                        "(user_id, exercise_id, element_id, operation_type, " +
+                        "old_x, old_y, new_x, new_y, delta_x, delta_y, " +
+                        "server_sequence, timestamp, date) " +
+                        "VALUES (?, ?, ?, 'MOVE', ?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+            
+            // server_sequenceとしてtimestampを使用 (一意性保証)
+            dao.execUpdate(sql, 
+                userId,
+                exerciseId,
+                elementId,
+                oldX,
+                oldY,
+                newX,
+                newY,
+                deltaX,
+                deltaY,
+                timestamp,  // server_sequence (NOT NULL)
+                timestamp   // timestamp
+            );
+            
+            logger.info("移動操作をDBに保存しました。element: " + elementId + 
+                       ", from: (" + oldX + "," + oldY + ") to: (" + newX + "," + newY + ")");
+            
+        } catch (Exception e) {
+            logger.severe("移動操作のDB保存エラー: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 }

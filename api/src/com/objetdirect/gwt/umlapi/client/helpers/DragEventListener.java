@@ -39,7 +39,20 @@ public interface DragEventListener {
 	 * この時点で、他のユーザーの同時ドラッグ操作との競合解決が行われます。
 	 * 
 	 * @param elementId ドラッグされた要素のID
-	 * @param finalPosition 最終的なドロップ位置
+	 * @param oldPosition ドラッグ開始時の位置(移動前)
+	 * @param finalPosition 最終的なドロップ位置(移動後)
 	 */
-	void onDragEnd(String elementId, Point finalPosition);
+	void onDragEnd(String elementId, Point oldPosition, Point finalPosition);
+	
+	/**
+	 * テキスト編集イベント通知（OT処理付き）
+	 * UML要素のテキストが編集された際に呼ばれます。
+	 * Operational Transformationにより、他のユーザーとの同時編集が適切に処理されます。
+	 * 
+	 * @param elementId 編集された要素のID
+	 * @param partId 編集された部分のID（クラス名やメソッド名など）
+	 * @param originalText 編集前のテキスト
+	 * @param newText 編集後のテキスト
+	 */
+	void sendTextChangeWithOT(String elementId, String partId, String originalText, String newText);
 }

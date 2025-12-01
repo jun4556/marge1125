@@ -114,7 +114,8 @@ public class UMLCanvas extends AbsolutePanel {
 	private static long										objectCount						= 1;
 	private static long										lifeLineCount					= 1;
 	private String											copyBuffer 						= "";
-	public static WebSocketSender webSocketSender;
+	// ★ 古いWebSocketSenderフィールドは削除しました (DragEventListenerパターンに移行)
+	// public static WebSocketSender webSocketSender;
 	private DragEventListener								dragEventListener				= null;
 	private long											noteCount;
 	private LinkKind										activeLinking;
@@ -292,6 +293,15 @@ public class UMLCanvas extends AbsolutePanel {
 	 */
 	public void setDragEventListener(DragEventListener listener) {
 		this.dragEventListener = listener;
+	}
+	
+	/**
+	 * Get the current drag event listener
+	 * 
+	 * @return 現在のDragEventListener（通常はDrawerPanel）、null可能
+	 */
+	public DragEventListener getDragEventListener() {
+		return this.dragEventListener;
 	}
 	
 	/**
@@ -1997,24 +2007,37 @@ public class UMLCanvas extends AbsolutePanel {
 			if (selectedArtifact.isDraggable()) {
 				placeFlag=true;
 				Point oldPoint = selectedArtifact.getLocation();
-				selectedArtifact.moveTo(Point.substract(Point.add(selectedArtifact.getLocation(), this.totalDragShift), this.duringDragOffset));
+				
+				// 位置情報がnullの場合はスキップ
+				if (oldPoint == null) {
+					System.err.println("WARNING: oldPoint is null for artifact " + selectedArtifact.getId());
+					continue;
+				}
+				
+				selectedArtifact.moveTo(Point.substract(Point.add(oldPoint, this.totalDragShift), this.duringDragOffset));
 
 				selectedArtifact.rebuildGfxObject();
 
-				            // OT実装: ドラッグ完了をリスナーに通知
-            if (this.dragEventListener != null) {
-                String elementId = "artifact-" + selectedArtifact.getId();
-                this.dragEventListener.onDragEnd(elementId, selectedArtifact.getLocation());
-            }
-
+				// OT実装: ドラッグ完了をリスナーに通知(oldPoint + newLocationを両方送信)
+				Point newLocation = selectedArtifact.getLocation();
+				if (this.dragEventListener != null && newLocation != null) {
+					String elementId = "artifact-" + selectedArtifact.getId();
+					this.dragEventListener.onDragEnd(elementId, oldPoint, newLocation);
+				}
 
 				//TODO dropEvent
 				//writeLog(selectedArtifact);
 				//MyLogger.operationLog("DropArtifact"+":"+selectedArtifact.toURL());
 				System.out.println("DropArtifact"+":"+selectedArtifact.toString());
-				MyLoggerExecute.registEditEvent(-1, selectedArtifact.toString(), "Place",
-						selectedArtifact.getClass().getName(), selectedArtifact.getId(), null, -1, -1,
-						null, oldPoint.getX()+","+oldPoint.getY(), selectedArtifact.getLocation().getX()+","+selectedArtifact.getLocation().getY(), null, UMLArtifact.getIdCount());
+				
+				// newLocationの再チェック(registEditEventでもgetX/getYを呼ぶため)
+				if (newLocation != null) {
+					MyLoggerExecute.registEditEvent(-1, selectedArtifact.toString(), "Place",
+							selectedArtifact.getClass().getName(), selectedArtifact.getId(), null, -1, -1,
+							null, oldPoint.getX()+","+oldPoint.getY(), newLocation.getX()+","+newLocation.getY(), null, UMLArtifact.getIdCount());
+				} else {
+					System.err.println("WARNING: newLocation is null after moveTo for artifact " + selectedArtifact.getId());
+				}
 
 //				int preEventId, String editEvent, String eventType,
 //				String targetType, int targetId, String linkKind, int rightObjectId, int leftObjectId,

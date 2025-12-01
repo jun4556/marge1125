@@ -640,16 +640,20 @@ public class DrawerPanel extends AbsolutePanel implements DragEventListener {
 	/**
 	 * OT実装: ドラッグ完了を通知 (DragEventListenerインターフェースの実装)
 	 * UMLCanvasがdrop()で呼び出す
+	 * 
+	 * @param elementId ドラッグされた要素のID
+	 * @param oldPosition ドラッグ開始時の位置(移動前)
+	 * @param finalPosition 最終的なドロップ位置(移動後)
 	 */
 	@Override
-	public void onDragEnd(String elementId, Point finalPosition) {
+	public void onDragEnd(String elementId, Point oldPosition, Point finalPosition) {
 		DragState dragState = draggingElements.get(elementId);
 		if (dragState != null) {
 			dragState.isActive = false;
 			dragState.currentPosition = finalPosition;
 			
-			// バッファされていたリモート操作を処理
-			onDragCompleted(elementId, finalPosition);
+			// バッファされていたリモート操作を処理(oldPositionも渡す)
+			onDragCompleted(elementId, oldPosition, finalPosition);
 			
 			// ドラッグ状態をクリア
 			draggingElements.remove(elementId);
@@ -661,6 +665,10 @@ public class DrawerPanel extends AbsolutePanel implements DragEventListener {
 	 * ドラッグ開始をサーバーに送信
 	 */
 	private void sendDragStart(String elementId, Point startPosition) {
+		if (startPosition == null) {
+			System.err.println("sendDragStart: startPosition is null for " + elementId);
+			return;
+		}
 		WebSocketClient client = getWebSocketClient();
 		if (client != null && client.isOpen()) {
 			// WebSocketでDRAG_START操作を送信
@@ -675,12 +683,16 @@ public class DrawerPanel extends AbsolutePanel implements DragEventListener {
 	
 	/**
 	 * ドラッグ完了後にバッファされた操作を処理し、競合を検出・解決
+	 * 
+	 * @param elementId ドラッグされた要素のID
+	 * @param oldPosition ドラッグ開始時の位置(移動前)
+	 * @param finalPosition 最終的なドロップ位置(移動後)
 	 */
-	private void onDragCompleted(String elementId, Point finalPosition) {
+	private void onDragCompleted(String elementId, Point oldPosition, Point finalPosition) {
 		List<RemoteOperation> bufferedOps = pendingRemoteOps.get(elementId);
 		if (bufferedOps == null || bufferedOps.isEmpty()) {
-			// バッファされた操作がない場合、通常通り移動操作を送信
-			sendMoveOperation(elementId, finalPosition);
+			// バッファされた操作がない場合、通常通り移動操作を送信(oldPosition含む)
+			sendMoveOperation(elementId, oldPosition, finalPosition);
 			return;
 		}
 		
@@ -701,17 +713,22 @@ public class DrawerPanel extends AbsolutePanel implements DragEventListener {
 		// Last-Write-Wins: タイムスタンプが新しい方（大きい方）を採用
 		if (localTimestamp > concurrentMove.timestamp) {
 			// ローカル操作の方が新しい → ローカル操作を優先
-			sendMoveOperation(elementId, finalPosition);
+			sendMoveOperation(elementId, oldPosition, finalPosition);
 			System.out.println("競合解決: ローカル操作を採用 (local=" + localTimestamp + ", remote=" + concurrentMove.timestamp + ")");
 		} else {
 			// リモート操作の方が新しい、または同時刻 → リモート操作を優先
 			applyRemoteMoveOperation(elementId, concurrentMove.newPosition);
 			System.out.println("競合解決: リモート操作を採用 (local=" + localTimestamp + ", remote=" + concurrentMove.timestamp + ")");
+			
+			// ★★★ ユーザーに競合を通知 ★★★
+			Window.alert("他のユーザー (ID: " + concurrentMove.userId + ") が先に移動しました。\n" +
+			             "あなたの移動操作は上書きされました。");
+			
 			// ローカルの移動は破棄される(サーバーに送信しない)
 		}
 	} else {
-		// 競合なし: 通常通り送信
-		sendMoveOperation(elementId, finalPosition);
+		// 競合なし: 通常通り送信(oldPosition含む)
+		sendMoveOperation(elementId, oldPosition, finalPosition);
 	}		// バッファされた他の操作(テキスト編集など)を適用
 		for (RemoteOperation op : bufferedOps) {
 			if (!"MOVE".equals(op.operationType)) {
@@ -721,17 +738,42 @@ public class DrawerPanel extends AbsolutePanel implements DragEventListener {
 	}
 	
 	/**
-	 * 移動操作をサーバーに送信
+	 * 移動操作をサーバーに送信(絶対座標版 - oldPosition + newPositionを両方送信)
+	 * 
+	 * @param elementId ドラッグされた要素のID
+	 * @param oldPosition 移動前の位置
+	 * @param newPosition 移動後の位置
 	 */
-	private void sendMoveOperation(String elementId, Point position) {
+	private void sendMoveOperation(String elementId, Point oldPosition, Point newPosition) {
+		if (oldPosition == null || newPosition == null) {
+			System.err.println("sendMoveOperation: oldPosition or newPosition is null for " + elementId);
+			return;
+		}
+		
+		// 移動していない場合はスキップ
+		int deltaX = newPosition.getX() - oldPosition.getX();
+		int deltaY = newPosition.getY() - oldPosition.getY();
+		if (deltaX == 0 && deltaY == 0) {
+			System.out.println("sendMoveOperation: No movement detected for " + elementId);
+			return;
+		}
+		
 		WebSocketClient client = getWebSocketClient();
 		if (client != null && client.isOpen()) {
+			// JSONフォーマット: 移動前後の絶対座標を送信
 			String message = "{\"action\":\"move\", \"elementId\":\"" + elementId + 
 			                 "\", \"userId\":\"" + client.getUserId() + 
 			                 "\", \"exerciseId\":" + client.getExerciseId() +
-			                 ", \"x\":" + position.getX() + ", \"y\":" + position.getY() + 
+			                 ", \"oldX\":" + oldPosition.getX() + 
+			                 ", \"oldY\":" + oldPosition.getY() + 
+			                 ", \"newX\":" + newPosition.getX() + 
+			                 ", \"newY\":" + newPosition.getY() + 
+			                 ", \"deltaX\":" + deltaX + 
+			                 ", \"deltaY\":" + deltaY + 
 			                 ", \"timestamp\":" + System.currentTimeMillis() + "}";
 			client.send(message);
+			System.out.println("SEND MOVE: " + elementId + " from (" + oldPosition.getX() + "," + oldPosition.getY() + 
+			                   ") to (" + newPosition.getX() + "," + newPosition.getY() + ")");
 		}
 	}
 	
